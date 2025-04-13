@@ -3,6 +3,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import logging
+import subprocess
 
 # assume git and cmake (64 bits) command is in PATH
 GIT_CMD = "git"
@@ -82,18 +84,36 @@ class DartLibInfo:
 
 
 def checkout_dart(info: DartLibInfo):
-    clonedir = os.path.join(SDK_DIR, "v" + info.version)
-
-    # if no version file,assume previous clone is failed. delete the whole directory and try again.
+    clonedir = os.path.join(SDK_DIR, f"v{info.version}")
     version_file = os.path.join(clonedir, "runtime", "vm", "version.cc")
-    if os.path.exists(clonedir) and not os.path.exists(version_file):
-        print("Delete incomplete clone directory " + clonedir)
 
-        def remove_readonly(func, path, _):
-            os.chmod(path, stat.S_IWRITE)
-            func(path)
+    # Clean up if an incomplete checkout exists
+    if os.path.isdir(clonedir) and not os.path.isfile(version_file):
+        logging.warning(f"Cleaning up broken Dart checkout: {clonedir}")
+        remove_directory(clonedir)
 
-        shutil.rmtree(clonedir, onerror=remove_readonly)
+    if not os.path.exists(clonedir):
+        logging.info(f"Cloning Dart SDK {info.version} into {clonedir}")
+        try:
+            subprocess.run([
+                GIT_CMD, "-c", "advice.detachedHead=false", "clone",
+                "-b", info.version, "--depth", "1", "--filter=blob:none",
+                "--sparse", "--progress", DART_GIT_URL, clonedir
+            ], check=True)
+
+            subprocess.run([
+                GIT_CMD, "sparse-checkout", "set",
+                "runtime", "tools", "third_party/double-conversion"
+            ], cwd=clonedir, check=True)
+
+            logging.info("Sparse checkout done.")
+
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Git clone/setup failed: {e}")
+            raise RuntimeError("Dart SDK checkout failed.") from e
+
+    return clonedir
+
 
     # clone Dart source code
     if not os.path.exists(clonedir):
