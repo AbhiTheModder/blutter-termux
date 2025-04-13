@@ -15,16 +15,26 @@ from elftools.elf.sections import SymbolTableSection
 def extract_snapshot_hash_flags(libapp_file):
     with open(libapp_file, 'rb') as f:
         elf = ELFFile(f)
-        # find "_kDartVmSnapshotData" symbol
+
         dynsym = elf.get_section_by_name('.dynsym')
-        sym = dynsym.get_symbol_by_name('_kDartVmSnapshotData')[0]
-        #section = elf.get_section(sym['st_shndx'])
-        assert sym['st_size'] > 128
-        f.seek(sym['st_value']+20)
-        snapshot_hash = f.read(32).decode()
-        data = f.read(256) # should be enough
-        flags = data[:data.index(b'\0')].decode().strip().split(' ')
-    
+        if dynsym is None:
+            raise ValueError("Missing '.dynsym' section.")
+
+        symbols = dynsym.get_symbol_by_name('_kDartVmSnapshotData')
+        if not symbols:
+            raise ValueError("Symbol '_kDartVmSnapshotData' not found.")
+
+        sym = symbols[0]
+        if sym['st_size'] <= 128:
+            raise ValueError("Snapshot data symbol too small to be valid.")
+
+        f.seek(sym['st_value'] + 20)
+        snapshot_hash = f.read(32).decode(errors='ignore')
+
+        raw_flags = f.read(256)
+        null_index = raw_flags.find(b'\0')
+        flags = raw_flags[:null_index].decode().strip().split() if null_index != -1 else 
+
     return snapshot_hash, flags
 
 def extract_libflutter_info(libflutter_file):
