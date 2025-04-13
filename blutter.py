@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 import argparse
-import glob
 import mmap
 import os
 import platform
@@ -8,7 +7,6 @@ import shutil
 import subprocess
 import sys
 import zipfile
-import tempfile
 
 from dartvm_fetch_build import DartLibInfo
 
