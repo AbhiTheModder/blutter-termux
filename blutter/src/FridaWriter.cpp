@@ -14,7 +14,7 @@ void FridaWriter::Create(const char* filename)
 
 	std::ofstream of(filename, std::ios_base::app);
 
-	of << "const ClassIdTagPos = " << dart::UntaggedObject::kClassIdTagPos << ";\n";
+	of << "const ClassIdTagPos = " << dart::UntaggedObject::ClassIdTag::shift() << ";\n";
 	of << fmt::format("const ClassIdTagMask = {:#x};\n", (1 << dart::UntaggedObject::kClassIdTagSize) - 1);
 
 	of << "const NumPredefinedCids = " << dart::kNumPredefinedCids << ";\n";
