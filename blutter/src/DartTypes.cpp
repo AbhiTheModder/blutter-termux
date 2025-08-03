@@ -165,6 +165,7 @@ DartType* DartTypeDb::FindOrAdd(dart::TypePtr typePtr)
 	}
 
 	const auto& type = dart::Type::Handle(typePtr);
+	auto cid = type.type_class_id();
 	auto dartCls = classes[type.type_class_id()];
 	ASSERT(dartCls);
 	// Add it to DB first. the type arguments might be many recursive calls
@@ -230,7 +231,18 @@ DartTypeParameter* DartTypeDb::FindOrAdd(dart::TypeParameterPtr typeParamPtr)
 	auto dartTypeParam = new DartTypeParameter(typeParam.IsNullable(), (uint16_t)typeParam.base(), (uint16_t)typeParam.index(), typeParam.IsClassTypeParameter());
 	typesMap[ptr] = dartTypeParam;
 
+	// Removing TypeRef also replaces TypeParameter.bound with TypeParameter.owner
+#ifdef HAS_TYPE_REF
 	dartTypeParam->bound = FindOrAdd(typeParam.bound());
+#else
+	// in Dart 3.5, owner.ptr() might be NULL (zero value)
+	// code in TypeParameter::bound() is changed between Dart version, do NOT copy it to here
+	//   only add the edge case here
+	if ((intptr_t)typeParamPtr.untag()->owner() == 0 || (intptr_t)typeParam.parameterized_class() == 0)
+		dartTypeParam->bound = FindOrAdd(dart::Isolate::Current()->group()->object_store()->nullable_object_type());
+	else
+		dartTypeParam->bound = FindOrAdd(typeParam.bound());
+#endif
 
 	return dartTypeParam;
 }

@@ -80,7 +80,7 @@ static VarValue* getPoolObject(DartApp& app, intptr_t offset, A64::Register dstR
 		case dart::kSmiCid:
 			return new VarInteger(dart::Smi::Cast(obj).Value(), dart::kSmiCid);
 		case dart::kMintCid:
-			return new VarInteger(dart::Mint::Cast(obj).AsInt64Value(), dart::kMintCid);
+			return new VarInteger(MintValue(dart::Mint::Cast(obj)), dart::kMintCid);
 		case dart::kDoubleCid:
 			return new VarDouble(dart::Double::Cast(obj).value());
 		case dart::kBoolCid:
@@ -101,6 +101,7 @@ static VarValue* getPoolObject(DartApp& app, intptr_t offset, A64::Register dstR
 			ASSERT(dartField);
 			return new VarField(*dartField);
 		}
+		case dart::kArrayCid:
 		case dart::kImmutableArrayCid:
 			return new VarArray(dart::Array::Cast(obj).ptr());
 		// should function and closure be their var types?
@@ -144,6 +145,10 @@ static VarValue* getPoolObject(DartApp& app, intptr_t offset, A64::Register dstR
 		}
 		case dart::kSubtypeTestCacheCid:
 			return new VarSubtypeTestCache();
+		case dart::kInt32x4Cid:
+		case dart::kFloat32x4Cid:
+		case dart::kFloat64x2Cid:
+			return new VarExpression(std::format("{}", obj.ToCString()), (int32_t)obj.GetClassId()); 
 		case dart::kLibraryPrefixCid:
 			// TODO: handle LibraryPrefix object
 		case dart::kInstanceCid:
@@ -181,6 +186,13 @@ static inline void handleDecompressPointer(AsmIterator& insn, arm64_reg reg) {
 	INSN_ASSERT(insn.id() == ARM64_INS_ADD);
 	INSN_ASSERT(insn.ops(0).reg == insn.ops(1).reg && insn.ops(0).reg == reg);
 	INSN_ASSERT(insn.ops(2).reg == CSREG_DART_HEAP && insn.ops(2).shift.value == 32);
+	++insn;
+}
+
+static inline void handleExtraDecompressPointer(AsmIterator& insn, arm64_reg reg) {
+	if (insn.id() != ARM64_INS_ADD) return;
+	if (!(insn.ops(0).reg == insn.ops(1).reg && insn.ops(0).reg == reg)) return;
+	if (!(insn.ops(2).reg == CSREG_DART_HEAP && insn.ops(2).shift.value == 32)) return;
 	++insn;
 }
 
@@ -223,6 +235,8 @@ public:
 	std::unique_ptr<AllocateStackInstr> processAllocateStackInstr(AsmIterator& insn);
 	std::unique_ptr<CheckStackOverflowInstr> processCheckStackOverflowInstr(AsmIterator& insn);
 	std::unique_ptr<CallLeafRuntimeInstr> processCallLeafRuntime(AsmIterator& insn);
+	std::unique_ptr<ILInstr> processObjectPoolInstr(AsmIterator& insn);
+	std::unique_ptr<LoadValueInstr> processLoadValueNoObjectPoolInstr(AsmIterator& insn);
 	std::unique_ptr<LoadValueInstr> processLoadValueInstr(AsmIterator& insn);
 	std::unique_ptr<ClosureCallInstr> processClosureCallInstr(AsmIterator& insn);
 	std::unique_ptr<MoveRegInstr> processMoveRegInstr(AsmIterator& insn);
@@ -246,8 +260,10 @@ public:
 	std::unique_ptr<ILInstr> processLoadStore(AsmIterator& insn);
 
 	struct ObjectPoolInstr {
+		// dstReg is srcReg when isWrite is true
 		A64::Register dstReg;
 		VarItem item{};
+		bool isWrite;
 		bool IsSet() const { return dstReg.IsSet(); }
 	};
 
@@ -285,7 +301,8 @@ static const AsmMatcherFn matcherFns[] = {
 	(AsmMatcherFn) &FunctionAnalyzer::processAllocateStackInstr,
 	(AsmMatcherFn) &FunctionAnalyzer::processCheckStackOverflowInstr,
 	(AsmMatcherFn) &FunctionAnalyzer::processCallLeafRuntime,
-	(AsmMatcherFn) &FunctionAnalyzer::processLoadValueInstr,
+	(AsmMatcherFn) &FunctionAnalyzer::processObjectPoolInstr,
+	(AsmMatcherFn) &FunctionAnalyzer::processLoadValueNoObjectPoolInstr,
 	(AsmMatcherFn) &FunctionAnalyzer::processDecompressPointerInstr,
 	(AsmMatcherFn) &FunctionAnalyzer::processClosureCallInstr,
 	(AsmMatcherFn) &FunctionAnalyzer::processSaveRegisterInstr,
@@ -309,6 +326,7 @@ static const AsmMatcherFn matcherFns[] = {
 FunctionAnalyzer::ObjectPoolInstr FunctionAnalyzer::getObjectPoolInstruction(AsmIterator& insn)
 {
 	int64_t offset = 0;
+	bool isWrite = false;
 	A64::Register dstReg;
 	InsnMarker marker(insn);
 	if (insn.id() == ARM64_INS_LDR) {
@@ -361,6 +379,11 @@ FunctionAnalyzer::ObjectPoolInstr FunctionAnalyzer::getObjectPoolInstruction(Asm
 				INSN_ASSERT(insn.ops(2).type == ARM64_OP_IMM);
 				offset = base + insn.ops(2).imm;
 			}
+			else if (insn.id() == ARM64_INS_STR) {
+				INSN_ASSERT(insn.ops(1).mem.base == offset_reg);
+				offset = base + insn.ops(1).mem.disp;
+				isWrite = true;
+			}
 			else {
 				INSN_ASSERT(false);
 			}
@@ -387,6 +410,20 @@ FunctionAnalyzer::ObjectPoolInstr FunctionAnalyzer::getObjectPoolInstruction(Asm
 				dstReg = A64::Register{ insn.ops(0).reg };
 				++insn;
 			}
+			if (insn.id() == ARM64_INS_STR && insn.ops(1).mem.base == CSREG_DART_PP && insn.ops(1).mem.index == offset_reg) {
+				dstReg = A64::Register{ insn.ops(0).reg };
+				++insn;
+				isWrite = true;
+			}
+		}
+	}
+	else if (insn.id() == ARM64_INS_STR) {
+		// PP offset less than 12 bits (for store)
+		if (insn.ops(1).mem.base == CSREG_DART_PP && insn.ops(1).mem.index == ARM64_REG_INVALID) {
+			offset = insn.ops(1).mem.disp;
+			dstReg = A64::Register{ insn.ops(0).reg };
+			++insn;
+			isWrite = true;
 		}
 	}
 
@@ -396,7 +433,7 @@ FunctionAnalyzer::ObjectPoolInstr FunctionAnalyzer::getObjectPoolInstruction(Asm
 
 	setAsmTextDataPool(marker.Take(), offset);
 	auto val = getPoolObject(app, offset, dstReg);
-	return ObjectPoolInstr{ dstReg, VarItem{VarStorage::NewPool((int)offset), val} };
+	return ObjectPoolInstr{ dstReg, VarItem{VarStorage::NewPool((int)offset), val}, isWrite };
 }
 
 void FunctionAnalyzer::printInsnException(InsnException& e)
@@ -515,6 +552,7 @@ if (target != 0) {
 std::unique_ptr<CallLeafRuntimeInstr> FunctionAnalyzer::processCallLeafRuntime(AsmIterator& insn)
 {
 	// CCallInstr::EmitNativeCode()
+	// Note: since Dart 3.5, CCallInstr::EmitNativeCode() is removed
 	if (insn.id() == ARM64_INS_AND && insn.ops(0).reg == CSREG_DART_SP && insn.ops(1).reg == CSREG_DART_SP && insn.ops(2).imm == 0xfffffffffffffff0) {
 		// previous IL must be EnterFrame
 		//INSN_ASSERT(fnInfo->LastIL()->Kind() == ILInstr::EnterFrame);
@@ -522,6 +560,7 @@ std::unique_ptr<CallLeafRuntimeInstr> FunctionAnalyzer::processCallLeafRuntime(A
 		if (fnInfo->LastIL()->Kind() == ILInstr::EnterFrame) {
 			InsnMarker marker(insn);
 			++insn;
+			// LeafRuntimeScope::Call()
 			if (insn.id() == ARM64_INS_MOV && insn.ops(0).reg == ARM64_REG_SP && insn.ops(1).reg == CSREG_DART_SP) {
 				++insn;
 
@@ -542,6 +581,7 @@ std::unique_ptr<CallLeafRuntimeInstr> FunctionAnalyzer::processCallLeafRuntime(A
 
 				INSN_ASSERT(insn.IsMovz());
 				INSN_ASSERT(insn.ops(0).reg == CSREG_DART_TMP);
+				INSN_ASSERT(insn.ops(1).imm == dart::VMTag::kDartTagId);
 				++insn;
 
 				INSN_ASSERT(insn.id() == ARM64_INS_STR);
@@ -642,9 +682,30 @@ std::unique_ptr<CallLeafRuntimeInstr> FunctionAnalyzer::processCallLeafRuntime(A
 		INSN_ASSERT(insn.ops(1).reg == CSREG_DART_SP);
 		++insn;
 
+		// since Dart 3.5, compiler save call target to THR::vm_tag (similar to LeafRuntimeScope::Call())
+		bool save_to_vm_tag = false;
+		if (insn.id() == ARM64_INS_STR) {
+			INSN_ASSERT(insn.ops(0).reg == call_target_reg);
+			INSN_ASSERT(insn.ops(1).mem.base == CSREG_DART_THR && insn.ops(1).mem.disp == AOT_Thread_vm_tag_offset);
+			++insn;
+			save_to_vm_tag = true;
+		}
+		
 		INSN_ASSERT(insn.id() == ARM64_INS_BLR);
 		INSN_ASSERT(insn.ops(0).reg == call_target_reg);
 		++insn;
+
+		if (save_to_vm_tag) {
+			INSN_ASSERT(insn.IsMovz());
+			INSN_ASSERT(insn.ops(0).reg == CSREG_DART_TMP);
+			INSN_ASSERT(insn.ops(1).imm == dart::VMTag::kDartTagId);
+			++insn;
+
+			INSN_ASSERT(insn.id() == ARM64_INS_STR);
+			INSN_ASSERT(insn.ops(0).reg == CSREG_DART_TMP);
+			INSN_ASSERT(insn.ops(1).mem.base == CSREG_DART_THR && insn.ops(1).mem.disp == AOT_Thread_vm_tag_offset);
+			++insn;
+		}
 
 		INSN_ASSERT(insn.id() == ARM64_INS_MOV);
 		INSN_ASSERT(insn.ops(0).reg == ARM64_REG_SP);
@@ -1130,8 +1191,8 @@ void FunctionAnalyzer::handleOptionalNamedParameters(AsmIterator& insn, arm64_re
 				++insn;
 			}
 
-			// weird case. add 1 to currParamPosSmiReg. maybe this named parameter is not used and skip it.
-			if (insn.id() == ARM64_INS_ADD) {
+			// weird case. add 1 to currParamPosSmiReg. maybe this named parameter is not used and skip it (might be more than once).
+			while (insn.id() == ARM64_INS_ADD) {
 				INSN_ASSERT(fnInfo->State()->GetValue(insn.ops(1).reg) == &valNameCurrParamPosSmi);
 				INSN_ASSERT(insn.ops(2).imm == 2); // tagged value of 1
 				fnInfo->State()->MoveRegister(insn.ops(0).reg, insn.ops(1).reg);
@@ -1438,7 +1499,7 @@ void FunctionAnalyzer::handleArgumentsDescriptorTypeArguments(AsmIterator& insn)
 	const auto typeArgLenReg = ToCapstoneReg(insn.ops(0).reg);
 	++insn;
 
-	handleDecompressPointer(insn, typeArgLenReg);
+	handleExtraDecompressPointer(insn, typeArgLenReg);
 
 	const auto storeTypeArgLenRes = handleStoreLocal(insn, typeArgLenReg);
 	if (storeTypeArgLenRes.fpOffset != 0) {
@@ -1481,7 +1542,7 @@ void FunctionAnalyzer::handleArgumentsDescriptorTypeArguments(AsmIterator& insn)
 	fnInfo->State()->ClearRegister(sizeReg);
 	++insn;
 
-	handleDecompressPointer(insn, sizeReg);
+	handleExtraDecompressPointer(insn, sizeReg);
 
 	INSN_ASSERT(insn.id() == ARM64_INS_ADD);
 	INSN_ASSERT(insn.ops(1).reg == CSREG_DART_FP);
@@ -1664,6 +1725,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 	//   these ILs will be appended after Prologue IL even the assembly is before the prologue ends
 	// Note: with method extractors optmization (since Dart 3.4), arguments might pass via registers (R1, R2, R3).
 	//   now, only see in closure and async method.
+	// since Dart 3.5, compiler does not generate decompress pointer instruction for small int (such as parameter count)
 	auto optionalParamCntReg = ARM64_REG_INVALID;
 	auto firstParamReg = ARM64_REG_INVALID;
 	InsnMarker marker(insn);
@@ -1804,7 +1866,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 			++insn;
 
 			// the value is Smi object. so decompress pointer instruction is generated automatically even it is not needed.
-			handleDecompressPointer(insn, paramCntReg);
+			handleExtraDecompressPointer(insn, paramCntReg);
 
 			ASSERT(fnInfo->useFramePointer);
 
@@ -2073,14 +2135,24 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 	return std::make_unique<SetupParametersInstr>(insn.Wrap(marker.Take()), &fnInfo->params);
 }
 
-std::unique_ptr<LoadValueInstr> FunctionAnalyzer::processLoadValueInstr(AsmIterator& insn)
+std::unique_ptr<ILInstr> FunctionAnalyzer::processObjectPoolInstr(AsmIterator& insn)
 {
 	const auto ins0_addr = insn.address();
 	auto objPoolInstr = getObjectPoolInstruction(insn);
 	if (objPoolInstr.IsSet()) {
+		if (objPoolInstr.isWrite) {
+			return std::make_unique<StoreObjectPoolInstr>(insn.Wrap(ins0_addr), objPoolInstr.dstReg, objPoolInstr.item.storage.offset);
+		}
 		// TODO: load object might be start of Dart instruction, check next instruction
 		return std::make_unique<LoadValueInstr>(insn.Wrap(ins0_addr), objPoolInstr.dstReg, std::move(objPoolInstr.item));
 	}
+
+	return nullptr;
+}
+
+std::unique_ptr<LoadValueInstr> FunctionAnalyzer::processLoadValueNoObjectPoolInstr(AsmIterator& insn)
+{
+	const auto ins0_addr = insn.address();
 
 	int64_t imm = 0;
 	A64::Register dstReg;
@@ -2134,6 +2206,19 @@ std::unique_ptr<LoadValueInstr> FunctionAnalyzer::processLoadValueInstr(AsmItera
 	}
 
 	return nullptr;
+}
+
+std::unique_ptr<LoadValueInstr> FunctionAnalyzer::processLoadValueInstr(AsmIterator& insn)
+{
+	// load from object pool is also LoadValue
+	auto il = processObjectPoolInstr(insn);
+	if (il != nullptr) {
+		if (il->Kind() != ILInstr::LoadValue)
+			return nullptr;
+		return std::unique_ptr<LoadValueInstr>((LoadValueInstr*)il.release());
+	}
+
+	return processLoadValueNoObjectPoolInstr(insn);
 }
 
 std::unique_ptr<ClosureCallInstr> FunctionAnalyzer::processClosureCallInstr(AsmIterator& insn)
@@ -2261,6 +2346,7 @@ std::unique_ptr<InitAsyncInstr> FunctionAnalyzer::processInitAsyncInstr(AsmItera
 				fnInfo->returnType = returnType;
 				const auto start = il->Start();
 				fnInfo->RemoveLastIL();
+				setAsmTextDataCall(insn.address(), (uint64_t)insn.ops(0).imm);
 				++insn;
 				return std::make_unique<InitAsyncInstr>(insn.Wrap(start), returnType);
 			}
@@ -2468,6 +2554,7 @@ std::unique_ptr<TestTypeInstr> FunctionAnalyzer::processInstanceofNoTypeArgument
 			else { // typeCheckCid == dart::kNumberCid || typeCheckCid == 0 (object)
 				INSN_ASSERT(typeName == vtype->ToString() || dartStub->kind == DartStub::DefaultTypeTestStub || dartStub->kind == DartStub::DefaultNullableTypeTestStub);
 			}
+			setAsmTextDataCall(insn.address(), (uint64_t)insn.ops(0).imm);
 			++insn;
 		}
 		else {
@@ -2498,7 +2585,7 @@ std::unique_ptr<BranchIfSmiInstr> FunctionAnalyzer::processBranchIfSmiInstr(AsmI
 
 std::unique_ptr<LoadClassIdInstr> FunctionAnalyzer::processLoadClassIdInstr(AsmIterator& insn)
 {
-	if (insn.id() == ARM64_INS_LDUR && insn.ops(1).mem.disp == -1 && dart::UntaggedObject::kClassIdTagPos == 12) {
+	if (insn.id() == ARM64_INS_LDUR && insn.ops(1).mem.disp == -1 && kUntaggedObjectClassIdTagPos == 12) {
 		// 0x21cb10: ldur  x1, [x0, #-1]  ; load object tag
 		const auto objReg = A64::Register{ insn.ops(1).mem.base };
 		const auto cidReg = insn.ops(0).reg;
@@ -2510,13 +2597,13 @@ std::unique_ptr<LoadClassIdInstr> FunctionAnalyzer::processLoadClassIdInstr(AsmI
 		INSN_ASSERT(insn.id() == ARM64_INS_UBFX);
 		INSN_ASSERT(insn.ops(0).reg == cidReg);
 		INSN_ASSERT(insn.ops(1).reg == cidReg);
-		INSN_ASSERT(insn.ops(2).imm == dart::UntaggedObject::kClassIdTagPos);
+		INSN_ASSERT(insn.ops(2).imm == kUntaggedObjectClassIdTagPos);
 		INSN_ASSERT(insn.ops(3).imm == dart::UntaggedObject::kClassIdTagSize);
 		++insn;
 
 		return std::make_unique<LoadClassIdInstr>(insn.Wrap(ins0_addr), objReg, A64::Register{cidReg});
 	}
-	else if (insn.id() == ARM64_INS_LDURH && insn.ops(1).mem.disp == 1 && dart::UntaggedObject::kClassIdTagPos == 16) {
+	else if (insn.id() == ARM64_INS_LDURH && insn.ops(1).mem.disp == 1 && kUntaggedObjectClassIdTagPos == 16) {
 		// https://github.com/dart-lang/sdk/commit/9182d5e5359988703a2b8a88c238f47a5295e18c
 		// 0x5f3900: ldurh  w3, [x0, #1]
 		const auto objReg = A64::Register{ insn.ops(1).mem.base };
@@ -2598,8 +2685,24 @@ std::unique_ptr<BoxInt64Instr> FunctionAnalyzer::processBoxInt64Instr(AsmIterato
 				INSN_ASSERT(stubKind == DartStub::AllocateMintSharedWithoutFPURegsStub || stubKind == DartStub::AllocateMintSharedWithFPURegsStub);
 			};
 
+			// since Dart 3.5, some function might omit EnterFrame at early of function but do it before calling (BL) here
+			bool doEnterFrame = false;
+			if (!fnInfo->useFramePointer) {
+				if (insn.id() == ARM64_INS_STP && insn.ops(0).reg == CSREG_DART_FP && insn.ops(1).reg == ARM64_REG_LR && insn.ops(2).mem.base == CSREG_DART_SP) {
+					INSN_ASSERT(insn.writeback());
+					++insn;
+
+					INSN_ASSERT(insn.id() == ARM64_INS_MOV);
+					INSN_ASSERT(insn.ops(0).reg == CSREG_DART_FP);
+					INSN_ASSERT(insn.ops(1).reg == CSREG_DART_SP);
+					++insn;
+					doEnterFrame = true;
+				}
+			}
+
 			if (insn.id() == ARM64_INS_BL) {
 				assertAllocateMintStub(app.GetFunction(insn.ops(0).imm));
+				setAsmTextDataCall(insn.address(), (uint64_t)insn.ops(0).imm);
 				++insn;
 			}
 			else {
@@ -2616,6 +2719,19 @@ std::unique_ptr<BoxInt64Instr> FunctionAnalyzer::processBoxInt64Instr(AsmIterato
 
 				INSN_ASSERT(insn.id() == ARM64_INS_BLR);
 				INSN_ASSERT(insn.ops(0).reg == CSREG_DART_LR);
+				++insn;
+			}
+
+			if (doEnterFrame) {
+				// MUST have LeaveFrame here
+				INSN_ASSERT(insn.id() == ARM64_INS_MOV && insn.ops(0).reg == CSREG_DART_SP && insn.ops(1).reg == CSREG_DART_FP);
+				++insn;
+
+				INSN_ASSERT(insn.id() == ARM64_INS_LDP && insn.op_count() == 4);
+				INSN_ASSERT(insn.ops(0).reg == CSREG_DART_FP);
+				INSN_ASSERT(insn.ops(1).reg == ARM64_REG_LR);
+				INSN_ASSERT(insn.ops(2).mem.base == CSREG_DART_SP);
+				INSN_ASSERT(insn.ops(3).imm == 0x10);
 				++insn;
 			}
 
@@ -2760,6 +2876,7 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadFieldTableInstr(AsmIterato
 						ASSERT(dartFn->IsStub());
 						const auto stubKind = reinterpret_cast<DartStub*>(dartFn)->kind;
 						INSN_ASSERT(stubKind == DartStub::InitLateStaticFieldStub || stubKind == DartStub::InitLateFinalStaticFieldStub);
+						setAsmTextDataCall(insn.address(), (uint64_t)insn.ops(0).imm);
 						++insn;
 					}
 					else {
@@ -2801,6 +2918,7 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadFieldTableInstr(AsmIterato
 					auto fn = app.GetFunction(insn2.ops(0).imm);
 					auto stub = fn->AsStub();
 					INSN_ASSERT(stub->kind == DartStub::LateInitializationErrorSharedWithoutFPURegsStub || stub->kind == DartStub::LateInitializationErrorSharedWithFPURegsStub);
+					setAsmTextDataCall(insn2.address(), (uint64_t)insn.ops(0).imm);
 					insn2.Next();
 					// load static field but throw an exception if it is not initialized
 					return std::make_unique<LoadStaticFieldInstr>(insn.Wrap(marker.Take()), dstReg, field_offset);
@@ -2847,7 +2965,8 @@ std::unique_ptr<AllocateObjectInstr> FunctionAnalyzer::processTryAllocateObject(
 		INSN_ASSERT(insn.ops(0).reg == inst_reg);
 		INSN_ASSERT(insn.ops(1).reg == inst_reg);
 		const auto inst_size = insn.ops(2).imm;
-		INSN_ASSERT(inst_size == 0x10);
+		// 0x20 for typed_data object
+		INSN_ASSERT(inst_size == 0x10 || inst_size == 0x20);
 		++insn;
 
 		INSN_ASSERT(insn.id() == ARM64_INS_CMP);
@@ -2891,7 +3010,7 @@ std::unique_ptr<AllocateObjectInstr> FunctionAnalyzer::processTryAllocateObject(
 		INSN_ASSERT(insn.ops(1).mem.base == inst_reg && insn.ops(1).mem.disp == -1); // because of kHeapObjectTag
 		++insn;
 
-		const uint32_t cid = (tag >> dart::UntaggedObject::kClassIdTagPos) & ((1 << dart::UntaggedObject::kClassIdTagSize) - 1);
+		const uint32_t cid = (tag >> kUntaggedObjectClassIdTagPos) & ((1 << dart::UntaggedObject::kClassIdTagSize) - 1);
 		auto dartCls = app.GetClass(cid);
 		//INSN_ASSERT(dartCls->Size() < 0 || dartCls->Size() == inst_size);
 
@@ -2987,6 +3106,7 @@ std::unique_ptr<WriteBarrierInstr> FunctionAnalyzer::processWriteBarrierInstr(As
 		const auto stubKind = reinterpret_cast<DartStub*>(stub)->kind;
 		INSN_ASSERT(stubKind == DartStub::WriteBarrierWrappersStub || stubKind == DartStub::ArrayWriteBarrierStub);
 		isArray = stubKind == DartStub::ArrayWriteBarrierStub;
+		setAsmTextDataCall(insn.address(), (uint64_t)insn.ops(0).imm);
 		++insn;
 	}
 	else {
@@ -3027,7 +3147,7 @@ std::unique_ptr<WriteBarrierInstr> FunctionAnalyzer::processWriteBarrierInstr(As
 	return std::make_unique<WriteBarrierInstr>(insn.Wrap(marker.Take()), objReg, valReg, isArray);
 }
 
-static ArrayOp getArrayOp(AsmIterator& insn)
+static ArrayOp getArrayOp(AsmIterator& insn, int32_t arr_data_offset)
 {
 	ArrayOp op;
 	if (insn.writeback())
@@ -3037,13 +3157,13 @@ static ArrayOp getArrayOp(AsmIterator& insn)
 		// for 64 bit integer, LDUR is used too
 		const auto regSize = GetCsRegSize(insn.ops(0).reg);
 		//if (regSize == dart::kCompressedWordSize)
-		return ArrayOp(regSize, true, ArrayOp::Unknown);
+		return ArrayOp(regSize, true, arr_data_offset == 0x17 ? ArrayOp::List : ArrayOp::Unknown);
 		//return ArrayOp(regSize, true, ArrayOp::TypedUnknown);
 	}
 	case ARM64_INS_LDURSW:
 		return ArrayOp(4, true, ArrayOp::TypedSigned);
 	case ARM64_INS_LDRB:
-		return ArrayOp(1, true, ArrayOp::TypedUnsigned);
+		return ArrayOp(1, true, arr_data_offset == 0x17 ? ArrayOp::List : ArrayOp::TypedUnsigned);
 	case ARM64_INS_LDRSB:
 		return ArrayOp(1, true, ArrayOp::TypedSigned);
 	case ARM64_INS_LDRH:
@@ -3053,7 +3173,7 @@ static ArrayOp getArrayOp(AsmIterator& insn)
 	case ARM64_INS_STUR: {
 		const auto regSize = GetCsRegSize(insn.ops(0).reg);
 		//if (regSize == dart::kCompressedWordSize)
-		return ArrayOp(regSize, false, ArrayOp::Unknown);
+		return ArrayOp(regSize, false, arr_data_offset == 0x17 ? ArrayOp::List : ArrayOp::Unknown);
 		//return ArrayOp(regSize, false, ArrayOp::TypedUnknown);
 	}
 	case ARM64_INS_STRB:
@@ -3159,12 +3279,19 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadStore(AsmIterator& insn)
 			const auto arr_data_offset = insn.ops(1).mem.disp;
 			if (insn.ops(1).mem.base != tmpReg || arr_data_offset < 8)
 				return nullptr;
-			const auto arrayOp = getArrayOp(insn);
+			const auto arrayOp = getArrayOp(insn, arr_data_offset);
 			if (!arrayOp.IsArrayOp())
 				return nullptr;
 			const auto idxShiftVal = arrayOp.SizeLog2();
-			if (shift.value == idxShiftVal) {
+			if (arrayOp.arrType == ArrayOp::List) {
+				// Uint8List or Int32x4
+				// do nothing for now
+			}
+			else if (shift.value == idxShiftVal) {
 				// nothing to do
+				if (idxShiftVal == 0) {
+					// TODO: Uint8List
+				}
 			}
 			else if (shift.value + 1 == idxShiftVal) {
 				//if (idxShiftVal)
@@ -3172,7 +3299,8 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadStore(AsmIterator& insn)
 				// TODO: this index is Smi
 			}
 			else {
-				FATAL("invalid shift for array operation");
+				//FATAL("invalid shift for array operation");
+				INSN_ASSERT(shift.value == idxShiftVal);
 			}
 			bool isTypedData = dart::UntaggedTypedData::payload_offset() - dart::kHeapObjectTag == arr_data_offset;
 			INSN_ASSERT(isTypedData || arr_data_offset == dart::Array::data_offset() - dart::kHeapObjectTag);
@@ -3192,7 +3320,7 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadStore(AsmIterator& insn)
 
 	if (insn.ops(1).mem.base != CSREG_DART_FP && insn.ops(1).mem.disp != 0) {
 		// load/store with fixed offset
-		const auto arrayOp = getArrayOp(insn);
+		const auto arrayOp = getArrayOp(insn, insn.ops(1).mem.disp);
 		if (arrayOp.IsArrayOp()) {
 			const auto valReg = A64::Register{ insn.ops(0).reg };
 			const auto objReg = A64::Register{ insn.ops(1).mem.base };

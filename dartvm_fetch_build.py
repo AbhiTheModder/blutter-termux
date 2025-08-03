@@ -1,3 +1,4 @@
+import mmap
 import os
 import shutil
 import stat
@@ -32,7 +33,7 @@ def load_source(modname, filename):
 """
 
 class DartLibInfo:
-    def __init__(self, version: str, os_name: str, arch: str, has_compressed_ptrs: bool = None, snapshot_hash: str = None):
+    def __init__(self, version: str, os_name: str, arch: str, has_compressed_ptrs = None, snapshot_hash = None):
         self.version = version
         self.os_name = os_name
         self.arch = arch
@@ -98,6 +99,18 @@ def checkout_dart(info: DartLibInfo):
             subprocess.run([sys.executable, 'tools/make_version.py', '--output', 'runtime/vm/version.cc', '--input', 'runtime/vm/version_in.cc'], cwd=clonedir, check=True)
         else:
             subprocess.run([sys.executable, MAKE_VERSION_FILE, clonedir, info.snapshot_hash], check=True)
+        
+        if sys.platform == 'win32':
+            # since Dart 3.8, RUNTIME_FUNCTION is declared when DART_HOST_OS_WINDOWS and TARGET_ARCH_ARM64 are set
+            # patch "runtime/platform/unwinding_records.h" to remove the declaration
+            vers = info.version.split('.', 2)
+            if int(vers[0]) >= 3 and int(vers[1]) >= 8:
+                with open(os.path.join(clonedir, 'runtime', 'platform', 'unwinding_records.h'), 'r+b') as f:
+                    mm = mmap.mmap(f.fileno(), 0)
+                    pos = mm.find(b'\n#if !defined(DART_HOST_OS_WINDOWS) || !defined(HOST_ARCH_ARM64)')
+                    if pos != -1:
+                        # replace "||" with "//" to comment out "!defined(HOST_ARCH_ARM64)"
+                        mm[pos+36:pos+38] = b'//'
     
     return clonedir
 

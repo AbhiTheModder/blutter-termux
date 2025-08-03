@@ -47,9 +47,7 @@ else:
 
 cc_srcs = []
 hdrs = []
-for path in ('vm', 'platform', 'vm/heap', 'vm/ffi'):
-    if path[-1] == '/':
-        path = path[:-1]
+for path in ('vm', 'platform', 'vm/heap', 'vm/ffi', 'vm/regexp'):
     path = os.path.join(BASEDIR, path)
     if not os.path.isdir(path):
         continue
@@ -62,15 +60,17 @@ for path in ('vm', 'platform', 'vm/heap', 'vm/ffi'):
 
 # extra source files
 extra_files = ( 'vm/version.cc', 'vm/dart_api_impl.cc', 'vm/native_api_impl.cc',
-        'vm/compiler/runtime_api.cc', 'vm/compiler/jit/compiler.cc')
+        'vm/compiler/runtime_api.cc', 'vm/compiler/jit/compiler.cc', 'platform/no_tsan.cc')
 for name in extra_files:
-    cc_srcs.append(os.path.join(BASEDIR, name))
+    src = os.path.join(BASEDIR, name)
+    if os.path.isfile(src):
+        cc_srcs.append(src)
 
-# extra public heaer
+# extra public header
 hdrs.append(os.path.join(BASEDIR, 'vm/version.h'))
 
 # other libraries
-for lib in ('async', 'core', 'developer', 'ffi', 'isolate', 'math', 'typed_data', 'vmservice', 'internal'):
+for lib in ('async', 'concurrent', 'core', 'developer', 'ffi', 'isolate', 'math', 'typed_data', 'vmservice', 'internal'):
     gni_file = os.path.join(BASEDIR, 'lib', lib+'_sources.gni')
     if os.path.isfile(gni_file):
         srcs = get_default_src_files(gni_file)

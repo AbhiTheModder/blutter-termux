@@ -107,8 +107,12 @@ endif()
 if (IDA_FCN)
 	set(defines ${defines} IDA_FCN)
 endif()
+if (UNIFORM_INTEGER_ACCESS)
+	set(defines ${defines} UNIFORM_INTEGER_ACCESS)
+endif()
 target_compile_definitions(${BINNAME} PRIVATE ${defines})
 
 target_compile_options(${BINNAME} PRIVATE ${cc_opts})
 
-install (TARGETS ${BINNAME} RUNTIME DESTINATION "${PROJECT_SOURCE_DIR}/../bin")
+cmake_path(SET DST_DIR NORMALIZE "${PROJECT_SOURCE_DIR}/../bin")
+install (TARGETS ${BINNAME} RUNTIME DESTINATION ${DST_DIR})

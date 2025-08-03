@@ -498,8 +498,8 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 		return std::format("Smi: {:#x}", dart::Smi::Cast(obj).Value());
 	case dart::kMintCid:
 		if (simpleForm || depth > 0)
-			return std::format("{:#x}", dart::Mint::Cast(obj).value());
-		return std::format("Mint: {:#x}", dart::Mint::Cast(obj).value());
+			return std::format("{:#x}", MintValue(dart::Mint::Cast(obj)));
+		return std::format("Mint: {:#x}", MintValue(dart::Mint::Cast(obj)));
 	case dart::kDoubleCid:
 		if (simpleForm || depth > 0)
 			return std::format("{}", dart::Double::Cast(obj).value());
@@ -549,7 +549,9 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 		}
 		return std::format("Code: {} ({:#x})", code.ToCString(), ep);
 	}
+	case dart::kArrayCid:
 	case dart::kImmutableArrayCid: {
+		// Note: since Dart 3.7, Ojbect Pool is mutable. so, Array is used too
 		// Objects in Object Pool immutable, so only immutable array is used for array
 		// Most of no type arguments in Object Pool are Argument Descriptor
 		const auto& arr = dart::Array::Cast(obj);
@@ -584,7 +586,7 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 	case dart::kRecordCid: {
 		const auto& record = dart::Record::Cast(obj);
 		std::ostringstream ss;
-		const auto type = app.typeDb->FindOrAdd(record.GetRecordType());
+		const auto type = app.typeDb->FindOrAdd(DartGetRecordType(record));
 		ss << "Record" << type->ToString() << " = (";
 		auto& field = dart::Object::Handle();
 		const auto num_fields = record.num_fields();
@@ -676,6 +678,18 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 		const auto& lib = dart::Library::Handle(ns.target());
 		const auto& libName = dart::String::Handle(lib.url());
 		return std::format("LibraryPrefix: {}, target lib: {} ({})", name.ToCString(), libName.ToCString(), lib.toplevel_class().untag()->id());
+	}
+	case dart::kInt32x4Cid: {
+		const auto& simd = dart::Int32x4::Cast(obj);
+		return std::format("Int32x4: ({}, {}, {}, {})", simd.x(), simd.y(), simd.z(), simd.w());
+	}
+	case dart::kFloat32x4Cid: {
+		const auto& simd = dart::Float32x4::Cast(obj);
+		return std::format("Float32x4: ({}, {}, {}, {})", simd.x(), simd.y(), simd.z(), simd.w());
+	}
+	case dart::kFloat64x2Cid: {
+		const auto& simd = dart::Float64x2::Cast(obj);
+		return std::format("Float64x2: ({}, {})", simd.x(), simd.y());
 	}
 	case dart::kInstanceCid:
 		return std::format("Obj!Object@{:x}", (uint32_t)(intptr_t)obj.ptr());
@@ -831,7 +845,7 @@ std::string DartDumper::getPoolObjectDescription(intptr_t offset, bool simpleFor
 	else if (objType == dart::ObjectPool::EntryType::kNativeFunction) {
 		auto pc = pool.RawValueAt(idx);
 		uintptr_t start = 0;
-		char* name = dart::NativeSymbolResolver::LookupSymbolName(pc, &start);
+		auto name = dart::NativeSymbolResolver::LookupSymbolName(pc, &start);
 		if (name != NULL) {
 			auto txt = std::format("[pp+{:#x}] NativeFn: {} at {:#x}", offset, name, pc);
 			dart::NativeSymbolResolver::FreeSymbolName(name);

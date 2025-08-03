@@ -183,6 +183,21 @@ public:
 	VarItem val;
 };
 
+class StoreObjectPoolInstr : public ILInstr {
+public:
+	StoreObjectPoolInstr(AddrRange addrRange, A64::Register srcReg, int64_t offset) : ILInstr(LoadValue, addrRange), srcReg(srcReg), offset(offset) {}
+	StoreObjectPoolInstr() = delete;
+	StoreObjectPoolInstr(StoreObjectPoolInstr&&) = delete;
+	StoreObjectPoolInstr& operator=(const StoreObjectPoolInstr&) = delete;
+
+	virtual std::string ToString() {
+		return std::format("[PP+{:#x}] = {}", offset, srcReg.Name());
+	}
+
+	A64::Register srcReg;
+	int64_t offset;
+};
+
 class ClosureCallInstr : public ILInstr {
 public:
 	ClosureCallInstr(AddrRange addrRange, int32_t numArg, int32_t numTypeArg) : ILInstr(ClosureCall, addrRange), numArg(numArg), numTypeArg(numTypeArg) {}
@@ -440,8 +455,10 @@ struct ArrayOp {
 		if (size == 8) return 3;
 		if (size == 4) return 2;
 		if (size == 2) return 1;
-		return 0;
+		if (size == 1) return 0;
+		return 255;
 	}
+	// TODO: correct List type or typed_data type (Int32x4, ...)
 	std::string ToString() {
 		switch (arrType) {
 		case List: return std::format("List_{}", size);
