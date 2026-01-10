@@ -140,20 +140,20 @@ def find_compat_macro(dart_version: str, no_analysis: bool, ida_fcn: bool):
         if mm.find(b"build_generic_method_extractor_code)") == -1:
             macros.append("-DNO_METHOD_EXTRACTOR_STUB=1")
 
-    with open(os.path.join(vm_path, 'object.h'), 'rb') as f:
-        mm = mmap.mmap(f.fileno(), 0, access = mmap.ACCESS_READ)
+    with open(os.path.join(vm_path, "object.h"), "rb") as f:
+        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         # [vm] Refactor access to Integer value
         # https://github.com/dart-lang/sdk/commit/84fd647969f0d74ab63f0994d95b5fc26cac006a
-        if mm.find(b'AsTruncatedInt64Value()') == -1:
-            macros.append('-DUNIFORM_INTEGER_ACCESS=1')
+        if mm.find(b"AsTruncatedInt64Value()") == -1:
+            macros.append("-DUNIFORM_INTEGER_ACCESS=1")
 
     if no_analysis:
         macros.append("-DNO_CODE_ANALYSIS=1")
 
     if ida_fcn:
         macros.append("-DIDA_FCN=1")
-    
-    major, minor, *_ = dart_version.split('.')
+
+    major, minor, *_ = dart_version.split(".")
     if (int(major) > 3) or (int(major) == 3 and int(minor) >= 5):
         # [vm] marking_stack_block_offset() changes since Dart Stable 3.5.0
         # https://github.com/worawit/blutter/issues/96#issue-2470674670
@@ -166,15 +166,23 @@ def cmake_blutter(input: BlutterInput):
     blutter_dir = os.path.join(SCRIPT_DIR, "blutter")
     builddir = os.path.join(BUILD_DIR, input.blutter_name)
 
-    macros = find_compat_macro(input.dart_info.version, input.no_analysis, input.ida_fcn)
+    macros = find_compat_macro(
+        input.dart_info.version, input.no_analysis, input.ida_fcn
+    )
 
     my_env = None
     if platform.system() == "Darwin":
-        mac_ver = int(platform.mac_ver()[0].split('.', 1)[0])
+        mac_ver = int(platform.mac_ver()[0].split(".", 1)[0])
         if mac_ver < 15:
-            llvm_path = subprocess.run(['brew', '--prefix', 'llvm@16'], capture_output=True, check=True).stdout.decode().strip()
-            clang_file = os.path.join(llvm_path, 'bin', 'clang')
-            my_env = {**os.environ, 'CC': clang_file, 'CXX': clang_file+'++'}
+            llvm_path = (
+                subprocess.run(
+                    ["brew", "--prefix", "llvm@16"], capture_output=True, check=True
+                )
+                .stdout.decode()
+                .strip()
+            )
+            clang_file = os.path.join(llvm_path, "bin", "clang")
+            my_env = {**os.environ, "CC": clang_file, "CXX": clang_file + "++"}
     # cmake -GNinja -Bbuild -DCMAKE_BUILD_TYPE=Release
     subprocess.run(
         [
@@ -233,15 +241,27 @@ def build_and_run(input: BlutterInput):
 
     # creating Visual Studio solution overrides building
     if input.create_vs_sln:
-        macros = find_compat_macro(input.dart_info.version, input.no_analysis, input.ida_fcn)
+        macros = find_compat_macro(
+            input.dart_info.version, input.no_analysis, input.ida_fcn
+        )
         blutter_dir = os.path.join(SCRIPT_DIR, "blutter")
         dbg_output_path = os.path.abspath(os.path.join(input.outdir, "out"))
         dbg_cmd_args = f"-i {input.libapp_path} -o {dbg_output_path}"
+        vscmd_ver = os.getenv("VSCMD_VER")
+        assert vscmd_ver is not None, (
+            "Need run blutter in Visual Studio Develeper console"
+        )
+        if vscmd_ver.startswith("18."):
+            generator = "Visual Studio 18 2026"
+        elif vscmd_ver.startswith("17."):
+            generator = "Visual Studio 17 2022"
+        else:
+            assert False, "Unknown Visual Studio version"
         subprocess.run(
             [
                 CMAKE_CMD,
                 "-G",
-                "Visual Studio 17 2022",
+                generator,
                 "-A",
                 "x64",
                 "-B",
@@ -254,7 +274,7 @@ def build_and_run(input: BlutterInput):
             + [blutter_dir],
             check=True,
         )
-        dbg_exe_dir = os.path.join(input.outdir, 'Debug')
+        dbg_exe_dir = os.path.join(input.outdir, "Debug")
         os.makedirs(dbg_exe_dir, exist_ok=True)
         for filename in glob.glob(os.path.join(BIN_DIR, "*.dll")):
             shutil.copy(filename, dbg_exe_dir)
@@ -285,7 +305,13 @@ def main_no_flutter(
     version, os_name, arch = dart_version.split("_")
     dart_info = DartLibInfo(version, os_name, arch)
     input = BlutterInput(
-        libapp_path, dart_info, outdir, rebuild_blutter, create_vs_sln, no_analysis, ida_fcn
+        libapp_path,
+        dart_info,
+        outdir,
+        rebuild_blutter,
+        create_vs_sln,
+        no_analysis,
+        ida_fcn,
     )
     build_and_run(input)
 
@@ -301,7 +327,13 @@ def main2(
 ):
     dart_info = get_dart_lib_info(libapp_path, libflutter_path)
     input = BlutterInput(
-        libapp_path, dart_info, outdir, rebuild_blutter, create_vs_sln, no_analysis, ida_fcn
+        libapp_path,
+        dart_info,
+        outdir,
+        rebuild_blutter,
+        create_vs_sln,
+        no_analysis,
+        ida_fcn,
     )
     build_and_run(input)
 
@@ -420,7 +452,14 @@ if __name__ == "__main__":
         check_for_updates_and_pull()
 
     if args.dart_version is None:
-        main(args.indir, args.outdir, args.rebuild, args.vs_sln, args.no_analysis, args.ida_fcn)
+        main(
+            args.indir,
+            args.outdir,
+            args.rebuild,
+            args.vs_sln,
+            args.no_analysis,
+            args.ida_fcn,
+        )
     else:
         main_no_flutter(
             args.indir,
