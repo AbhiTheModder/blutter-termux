@@ -187,9 +187,18 @@ std::vector<std::pair<intptr_t, std::string>> DartDumper::DumpStructHeaderFile(s
 		if (objType == dart::ObjectPool::EntryType::kTaggedObject) {
 			obj = pool.ObjectAt(i);
 			if (obj.IsUnlinkedCall()) {
-				const auto imm = pool.RawValueAt(i + 1);
-				auto dartFn = app.GetFunction(imm - app.base());
-				name = std::format("UnlinkedCall_{:#x}_{:#x}", offset, dartFn->Address(), offset);
+				// since Dart 3.10, target type might be kTaggedObject
+				auto unlinkTargetType = pool.TypeAt(i + 1);
+				if (unlinkTargetType == dart::ObjectPool::EntryType::kImmediate) {
+					const auto imm = pool.RawValueAt(i + 1);
+					auto dartFn = app.GetFunction(imm - app.base());
+					name = std::format("UnlinkedCall_{:#x}_{:#x}", offset, dartFn->Address(), offset);
+				}
+				else {
+					ASSERT(unlinkTargetType == dart::ObjectPool::EntryType::kTaggedObject);
+					const auto imm = pool.RawValueAt(i + 1);
+					name = std::format("UnlinkedCall_{:#x}_tagged_{:#x}", offset, imm - app.base());
+				}
 			}
 			else {
 				// TODO: more meaningful variable name
@@ -789,10 +798,18 @@ std::string DartDumper::getPoolObjectDescription(intptr_t offset, bool simpleFor
 	if (objType == dart::ObjectPool::EntryType::kTaggedObject) {
 		auto& obj = dart::Object::Handle(pool.ObjectAt(idx));
 		if (obj.IsUnlinkedCall()) {
-			ASSERT(pool.TypeAt(idx + 1) == dart::ObjectPool::EntryType::kImmediate);
-			const auto imm = pool.RawValueAt(idx + 1);
-			auto dartFn = app.GetFunction(imm - app.base());
-			return std::format("[pp+{:#x}] UnlinkedCall: {:#x} - {}", offset, dartFn->Address(), dartFn->FullName().c_str());
+			// since Dart 3.10, target type might be kTaggedObject
+			auto unlinkTargetType = pool.TypeAt(idx + 1);
+			if (unlinkTargetType == dart::ObjectPool::EntryType::kImmediate) {
+				const auto imm = pool.RawValueAt(idx + 1);
+				auto dartFn = app.GetFunction(imm - app.base());
+				return std::format("[pp+{:#x}] UnlinkedCall: {:#x} - {}", offset, dartFn->Address(), dartFn->FullName().c_str());
+			}
+			else {
+				ASSERT(unlinkTargetType == dart::ObjectPool::EntryType::kTaggedObject);
+				auto& obj2 = dart::Object::Handle(pool.ObjectAt(idx + 1));
+				return std::format("[pp+{:#x}] UnlinkedCall: {}", offset, ObjectToString(obj2, simpleForm));
+			}
 		}
 		return std::format("[pp+{:#x}] {}", offset, ObjectToString(obj, simpleForm));
 	}
