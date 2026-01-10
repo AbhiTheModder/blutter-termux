@@ -111,6 +111,11 @@ def checkout_dart(info: DartLibInfo):
                     if pos != -1:
                         # replace "||" with "//" to comment out "!defined(HOST_ARCH_ARM64)"
                         mm[pos+36:pos+38] = b'//'
+                    else:
+                        # newer Dart version use static_assert for checking RUNTIME_FUNCTION size, comment out that line
+                        pos = mm.find(b'\nstatic_assert(sizeof(')
+                        if pos != -1:
+                            mm[pos+1:pos+3] = b'//'
     
     return clonedir
 
