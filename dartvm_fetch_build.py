@@ -209,12 +209,16 @@ def get_dartlib_name(ver: str, arch: str, os_name: str):
 
 
 def cmake_dart(info: DartLibInfo, target_dir: str):
+    # Dart 3.11.0+ requires C++20 https://github.com/dart-lang/sdk/commit/3ebbaf08fb9236023b8f37bb9e9de85a9be8e281
+    major, minor = map(int, info.version.split(".")[:2])
+    cpp_std = "20" if (major, minor) >= (3, 11) else "17"
+
     # On windows, need developer command prompt for x64 (can check with "cl" command)
     # create dartsdk/vx.y.z/CMakefile.list
     with open(CMAKE_TEMPLATE_FILE, "r") as f:
         code = f.read()
     with open(os.path.join(target_dir, "CMakeLists.txt"), "w") as f:
-        f.write(code.replace("VERSION_PLACE_HOLDER", info.version))
+        f.write(code.replace("VERSION_PLACE_HOLDER", info.version).replace("STD_PLACE_HOLDER", cpp_std))
 
     # create dartsdk/vx.y.z/Config.cmake.in
     with open(os.path.join(target_dir, "Config.cmake.in"), "w") as f:
