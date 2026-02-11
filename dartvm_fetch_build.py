@@ -128,7 +128,7 @@ def cmake_dart(info: DartLibInfo, target_dir: str):
     with open(CMAKE_TEMPLATE_FILE, 'r') as f:
         code = f.read()
     with open(os.path.join(target_dir, 'CMakeLists.txt'), 'w') as f:
-        f.write(code.replace("VERSION_PLACE_HOLDER", info.version).replace("STD_PLACE_HOLDER", cpp_std))
+        f.write(code.replace('VERSION_PLACE_HOLDER', info.version).replace('STD_PLACE_HOLDER', cpp_std))
 
     # create dartsdk/vx.y.z/Config.cmake.in
     with open(os.path.join(target_dir, 'Config.cmake.in'), 'w') as f:
