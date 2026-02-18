@@ -23,7 +23,10 @@ pkgs.mkShell {
     openssl
     icu72
   ];
-  shellHook = ''
-    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.capstone_4}/lib:${pkgs.icu72}/lib:${pkgs.openssl.dev}/lib"
-  '';
+
+  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+    pkgs.capstone_4
+    pkgs.icu72
+    pkgs.openssl
+  ];
 }
