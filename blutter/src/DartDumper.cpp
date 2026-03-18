@@ -213,11 +213,20 @@ void DartDumper::Dump4Ida(std::filesystem::path outDir)
 			for (auto dartFn : cls->Functions()) {
 				const auto ep = dartFn->Address();
 				auto name = getFunctionName4Ida(*dartFn, cls_prefix);
-				of << fmt::format("ida_funcs.add_func({:#x}, {:#x})\n", ep, ep + dartFn->Size());
-				of << fmt::format("idaapi.set_name({:#x}, \"{}_{}::{}_{:x}\")\n", ep, lib_prefix, cls_prefix, name.c_str(), ep);
+				const auto fnSize = dartFn->Size();
+				if (fnSize > 0) {
+					of << std::format("ida_funcs.add_func({:#x}, {:#x})\n", ep, ep + fnSize);
+				}
+				of << std::format("idaapi.set_name({:#x}, \"{}_{}::{}_{:x}\")\n", ep, lib_prefix, cls_prefix, name.c_str(), ep);
 				if (dartFn->HasMorphicCode()) {
-					of << fmt::format("idaapi.set_name({:#x}, \"{}_{}::{}_{:x}_miss\")\n", dartFn->PayloadAddress(), lib_prefix, cls_prefix, name.c_str(), ep);
-					of << fmt::format("idaapi.set_name({:#x}, \"{}_{}::{}_{:x}_check\")\n", dartFn->MonomorphicAddress(), lib_prefix, cls_prefix, name.c_str(), ep);
+					const auto payloadAddr = dartFn->PayloadAddress();
+					const auto morphicAddr = dartFn->MonomorphicAddress();
+					if (payloadAddr != 0 && payloadAddr != ep) {
+						of << std::format("idaapi.set_name({:#x}, \"{}_{}::{}_{:x}_miss\")\n", payloadAddr, lib_prefix, cls_prefix, name.c_str(), ep);
+					}
+					if (morphicAddr != 0 && morphicAddr != ep && morphicAddr != payloadAddr) {
+						of << std::format("idaapi.set_name({:#x}, \"{}_{}::{}_{:x}_check\")\n", morphicAddr, lib_prefix, cls_prefix, name.c_str(), ep);
+					}
 				}
 			}
 		}
