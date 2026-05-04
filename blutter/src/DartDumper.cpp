@@ -632,7 +632,15 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 		return "SubtypeTestCache";
 	case dart::kFunctionCid: {
 		// stub never be in Object Pool
-		auto dartFn = app.GetFunction(dart::Function::Cast(obj).entry_point() - app.base())->AsFunction();
+		auto& fn = dart::Function::Cast(obj);
+		auto offset = fn.entry_point() - app.base();
+		auto info = app.GetFunction(offset);
+		if (!info || info->IsStub()) {
+		    std::string name = fn.UserVisibleNameCString();
+			const char* type = info ? "StubFunction" : "UnresolvedFunction";
+			return fmt::format("{}: {} ({:#x})", type, name.empty() ? "[unknown]" : name, offset);
+		}
+		auto dartFn = info->AsFunction();
 		if (dartFn->IsClosure()) {
 			auto parentFn = dartFn->GetOutermostFunction();
 			if (parentFn) {
