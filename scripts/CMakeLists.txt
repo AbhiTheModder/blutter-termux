@@ -97,6 +97,7 @@ else()
 		-O3 -fno-ident -fdata-sections -ffunction-sections
 		-fno-omit-frame-pointer -fno-rtti -fno-exceptions
 		-fno-sanitize=thread
+		-include ${CMAKE_CURRENT_SOURCE_DIR}/icu_compat.h
 		#-Wall
 	)
 endif()

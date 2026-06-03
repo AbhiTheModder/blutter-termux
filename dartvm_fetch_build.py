@@ -225,6 +225,12 @@ def cmake_dart(info: DartLibInfo, target_dir: str):
     with open(os.path.join(target_dir, "CMakeLists.txt"), "w") as f:
         f.write(code.replace("VERSION_PLACE_HOLDER", info.version).replace("STD_PLACE_HOLDER", cpp_std))
 
+    # copy ICU compatibility header (needed for ICU < 73 with Dart 3.12+)
+    shutil.copy2(
+        os.path.join(SCRIPT_DIR, "scripts", "icu_compat.h"),
+        os.path.join(target_dir, "icu_compat.h"),
+    )
+
     # create dartsdk/vx.y.z/Config.cmake.in
     with open(os.path.join(target_dir, "Config.cmake.in"), "w") as f:
         f.write("@PACKAGE_INIT@\n\n")
