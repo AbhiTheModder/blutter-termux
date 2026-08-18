@@ -1990,6 +1990,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 		++insn;
 	}
 
+#ifndef BLUTTER_DART_SINGLE_SNAPSHOT
 	// PrologueBuilder::BuildClosureContextHandling()
 	// closure context handling
 	if (dartFn->IsClosure() && insn.id() == ARM64_INS_LDUR && insn.ops(1).mem.disp == AOT_Closure_context_offset - dart::kHeapObjectTag) {
@@ -2021,6 +2022,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 				}
 			}
 	}
+#endif
 
 	// TypeArgument from Arguments Descriptor might be used
 	if (argsDescReg != ARM64_REG_INVALID)
@@ -2029,6 +2031,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 	if (endPrologueAddr != 0 && insn.address() < endPrologueAddr)
 		handleInitialization();
 
+#ifndef BLUTTER_DART_SINGLE_SNAPSHOT
 	// closure delayed type arguments
 	if (dartFn->IsClosure()) {
 		const auto save_ins = insn.Current();
@@ -2143,6 +2146,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 			insn.SetCurrent(save_ins);
 		}
 	}
+#endif
 
 	if (insn.address() < endPrologueAddr) {
 		// short-lived aliases for prologue parameter register shuffle

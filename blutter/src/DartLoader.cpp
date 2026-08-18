@@ -18,6 +18,21 @@ static void init_vm_flags()
 		throw std::runtime_error(error);
 }
 
+#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
+static void init_dart()
+{
+	char* error = NULL;
+
+	Dart_InitializeParams init_params;
+	memset(&init_params, 0, sizeof(init_params));
+	init_params.version = DART_INITIALIZE_PARAMS_CURRENT_VERSION;
+	init_params.start_kernel_isolate = false;
+	error = Dart_Initialize(&init_params);
+	if (error) {
+		throw std::runtime_error(error);
+	}
+}
+#else
 static void init_dart(const uint8_t* vm_snapshot_data, const uint8_t* vm_snapshot_instructions)
 {
 	char* error = NULL;
@@ -34,6 +49,7 @@ static void init_dart(const uint8_t* vm_snapshot_data, const uint8_t* vm_snapsho
 		throw std::runtime_error(error);
 	}
 }
+#endif
 
 static Dart_Isolate load_isolate(const uint8_t* isolate_snapshot_data, const uint8_t* isolate_snapshot_instructions)
 {
@@ -45,6 +61,9 @@ static Dart_Isolate load_isolate(const uint8_t* isolate_snapshot_data, const uin
 	//flags.snapshot_is_dontneed_safe = true; // Dart <= 2.14 has no this field
 	// dart 3 is always null safety
 	// null safety is enabled by default on Flutter 2.0 with Dart 2.12 (since April 2021)
+#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
+	flags.null_safety = true;
+#else
 	auto pos = strstr((const char*)isolate_snapshot_data + 0x30, "null-safety");
 	if (pos == NULL) {
 		// dart 3 is always null safety, it's ok to consider null-safety to be present, blutter isn't able to find it
@@ -55,6 +74,7 @@ static Dart_Isolate load_isolate(const uint8_t* isolate_snapshot_data, const uin
 	    // "no-null-safety" is set when null safety is disabled. So check for space
 	    flags.null_safety = pos[-1] == ' ';
 	}
+#endif
 
 	auto isolate = Dart_CreateIsolateGroup(nullptr, nullptr, isolate_snapshot_data,
 		isolate_snapshot_instructions, &flags,
@@ -70,7 +90,11 @@ Dart_Isolate DartLoader::Load(LibAppInfo& libInfo)
 {
 	init_vm_flags();
 
+#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
+	init_dart();
+#else
 	init_dart(libInfo.vm_snapshot_data, libInfo.vm_snapshot_instructions);
+#endif
 
 	auto isolate = load_isolate(libInfo.isolate_snapshot_data, libInfo.isolate_snapshot_instructions);
 

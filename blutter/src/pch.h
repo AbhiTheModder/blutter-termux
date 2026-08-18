@@ -37,6 +37,12 @@ PRAGMA_WARNING(push, 0)
 #include <vm/compiler/runtime_offsets_extracted.h>
 PRAGMA_WARNING(pop)
 
+// Dart 3.13 removed the VM isolate and uses one snapshot data/text pair.
+// kSnapshotDataAsmSymbol is only defined by Dart versions using that layout.
+#ifdef kSnapshotDataAsmSymbol
+#  define BLUTTER_DART_SINGLE_SNAPSHOT 1
+#endif
+
 #ifdef OLD_MAP_SET_NAME
 namespace dart {
 	using Map = LinkedHashMap;

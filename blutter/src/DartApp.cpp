@@ -294,6 +294,30 @@ void DartApp::loadFromClassTable(dart::IsolateGroup* ig)
 
 void DartApp::loadStubs(dart::ObjectStore* store)
 {
+#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
+	(void)store;
+	uint64_t ep_addr;
+	DartStub* stub;
+
+	throwStubAddr = dart::StubCode::Throw().EntryPoint();
+
+#define DO(name) { \
+		const auto& code = dart::StubCode::name(); \
+		ep_addr = code.EntryPoint() - base(); \
+		if (!stubs.contains(ep_addr)) { \
+			stub = new DartStub(code.ptr(), DartStub::name ## Stub, ep_addr, code.Size(), #name); \
+			stubs[ep_addr] = stub; \
+			auto it = functions.find(ep_addr); \
+			if (it != functions.end()) { \
+				auto dartFn = it->second; \
+				std::erase(dartFn->Class().functions, dartFn); \
+				functions.erase(it); \
+			} \
+		} \
+	}
+	VM_STUB_CODE_LIST(DO);
+#undef DO
+#else
 	dart::CodePtr ptr;
 	auto& code = dart::Code::Handle();
 	uint64_t ep_addr;
@@ -340,6 +364,7 @@ void DartApp::loadStubs(dart::ObjectStore* store)
 	}
 	VM_STUB_CODE_LIST(DO);
 #undef DO
+#endif
 }
 
 DartFunction* DartApp::addFunctionNoCheck(const dart::Function& func)

@@ -90,7 +90,7 @@ if (MSVC)
 	# remove compiler RTTI option
 	string(REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 	set(cc_opts
-		/Oy /GR- /EHs-c-
+		/Oy /GR- /EHs-c- /Zc:preprocessor /utf-8
 	)
 else()
 	set(cc_opts
