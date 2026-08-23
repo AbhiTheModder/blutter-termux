@@ -175,8 +175,10 @@ static VarValue* getPoolObject(DartApp& app, intptr_t offset, A64::Register dstR
 		return new VarInteger(imm, VarValue::NativeInt);
 	}
 	else if (objType == dart::ObjectPool::EntryType::kNativeFunction) {
-		//val = pool.RawValueAt(idx);
-		throw std::runtime_error("getting native function pool object from Dart code");
+		// normally, it is only used in internal library (can be ignored)
+		// but it can be loaded in Dart code (e.g. for calling bootstrap native)
+		const auto addr = pool.RawValueAt(idx);
+		return new VarExpression(fmt::format("NativeFn_{:#x}", addr));
 	}
 	else {
 		throw std::runtime_error(fmt::format("unknown pool object type: {}", (int)objType).c_str());
